@@ -1,1 +1,137 @@
+dbutils.fs.mount(source='wasbs://landing@week11assignment.blob.core.windows.net',
+mount_point='/mnt/week11assignment/landing',
+extra_configs={''})
+     
 
+dbutils.fs.ls('/mnt/week11assignment/landing')
+     
+
+dbutils.fs.mount(source='wasbs://staging@week11assignment.blob.core.windows.net',
+mount_point='/mnt/week11assignment/staging',
+extra_configs={''})
+     
+
+dbutils.fs.mount(source='wasbs://reporting@week11assignment.blob.core.windows.net',
+mount_point='/mnt/week11assignment/reporting',
+extra_configs={''})
+     
+
+orders_schema = 'order_id string, order_date date, order_customer_id string, order_status string'
+
+orders_df = spark.read.format("csv") \
+.schema(orders_schema) \
+.load("/mnt/week11assignment/landing/orders-230715-163711.csv")
+     
+
+display(orders_df)
+     
+
+customers_schema = 'customer_id string, customer_fname string, customer_lname string, customer_email string, customer_password string, customer_street string, customer_city string, customer_state string,customer_zipcode string'
+
+customers_df = spark.read.format("csv") \
+.schema(customers_schema) \
+.load("/mnt/week11assignment/landing/customers-230715-163711.csv")
+     
+
+display(customers_df)
+     
+
+from pyspark.sql.functions import year, month
+
+orders_df = orders_df.withColumn("order_year",year("order_date")).withColumn("order_month", month("order_date"))
+     
+
+display(orders_df)
+     
+
+orders_df.write\
+.format("parquet")\
+.mode("overwrite")\
+.partitionBy("order_year","order_status")\
+.save("/mnt/week11assignment/staging/order")
+     
+
+customers_df.write\
+.format("parquet")\
+.mode("overwrite")\
+.partitionBy("customer_state")\
+.save("/mnt/week11assignment/staging/customer")
+     
+
+customers_df_stg = spark.read.format("parquet") \
+.option("header","true")\
+.load("/mnt/week11assignment/staging/customer")
+     
+
+display(customers_df_stg)
+     
+
+orders_df_stg = spark.read.format("parquet") \
+.option("header","true")\
+.load("/mnt/week11assignment/staging/order")
+     
+
+display(orders_df_stg)
+     
+
+from pyspark.sql.functions import broadcast, expr
+
+joined_df = orders_df_stg.join(broadcast(customers_df_stg), expr("order_customer_id=customer_id"))
+
+reporting_df = joined_df.select("order_id","order_date","order_customer_id","order_month","order_year","order_status","customer_fname","customer_lname","customer_city","customer_zipcode","customer_state")
+     
+
+display(reporting_df)
+     
+
+reporting_df.write\
+.format("parquet")\
+.mode("overwrite")\
+.partitionBy("order_year","customer_state","customer_city","order_status")\
+.save("/mnt/week11assignment/reporting")
+     
+
+order_cust_rpt = spark.read.format("parquet") \
+.option("header","true")\
+.load("/mnt/week11assignment/reporting")
+
+display(order_cust_rpt)
+     
+
+order_cust_rpt.select(expr("order_customer_id").alias("customer_id"),expr("concat(customer_fname,'',customer_lname)").alias("customer_name"),"order_date","customer_city","customer_state","order_status","order_year","order_month") \
+.createOrReplaceTempView("order_cust_vw")
+     
+
+spark.sql("select * from order_cust_vw limit 10").show()
+     
+
+spark.sql("cache table order_cust_vw")
+     
+
+%sql
+--Ans 6b - running the required query
+select distinct customer_name from order_cust_vw where customer_state='TX' AND order_status='COMPLETE' AND order_year='2014'
+     
+
+dbutils.widgets.dropdown(name = 'state_input', defaultValue='TX', choices=['TX', 'NY', 'CA'], label= "State:")
+
+dbutils.widgets.dropdown(name = 'status_input', defaultValue='COMPLETE', choices=['COMPLETE', 'PENDING_PAYMENT', 'CLOSED', 'PROCESSING'],label= "Status:")
+
+dbutils.widgets.text(name = 'year_input', defaultValue= "2014", label= "Year:")
+     
+
+state = dbutils.widgets.get('state_input')
+status = dbutils.widgets.get('status_input')
+year = dbutils.widgets.get('year_input')
+     
+
+display(spark.sql(f"SELECT distinct customer_name FROM order_cust_vw WHERE customer_state = '{state}' AND order_status = '{status}' AND order_year = '{year}'"))
+     
+
+dbutils.widgets.dropdown("month_input", "1", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"], "Month:")
+
+month = dbutils.widgets.get("month_input")
+     
+
+display(spark.sql(f"SELECT count(customer_id) FROM order_cust_vw WHERE customer_state = '{state}' AND order_status = '{status}' AND order_year = '{year}' AND order_month = '{month}'"))
+     
